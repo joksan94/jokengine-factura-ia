@@ -138,4 +138,5 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 # Temp directory for generated PDFs and other temporary files
-temp/jokengineia-firebase-adminsdk-fbsvc-6bd04ac443.json
+temp/
+jokengineia-firebase-adminsdk-fbsvc-6bd04ac443.json
