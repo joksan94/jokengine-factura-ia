@@ -1,13 +1,12 @@
 const { db } = require("./src/config/firebase"); // Ajusta la ruta según tu estructura de proyecto
 const admin = require("firebase-admin");
-const dayjs = require("dayjs");
 
 async function initNegocio(negocioId) {
   const negocioRef = db.collection("negocios").doc(negocioId);
 
   const negocioData = {
     nombre: "Saludable S.A. de C.V.",
-    telefono: "+527471304879",
+    telefono: "5217471304879",
     email: "contacto@saludable.mx",
     creadoEn: admin.firestore.FieldValue.serverTimestamp(),
     activo: true,
@@ -26,6 +25,7 @@ async function initNegocio(negocioId) {
     nextFolio = parseInt(lastFolioData.Folio || 100) + 1;
   }
 
+  // Configuración fiscal del negocio
   const configFiscal = {
     Serie: "FA",
     Folio: nextFolio.toString(),
@@ -47,26 +47,46 @@ async function initNegocio(negocioId) {
 
   const batch = db.batch();
 
-  // Crear documento principal del negocio
+  // Documento principal
   batch.set(negocioRef, negocioData);
 
-  // Configuración fiscal en /negocios/{id}/config/global
+  // Configuración global fiscal
   const configRef = negocioRef.collection("config").doc("global");
   batch.set(configRef, configFiscal);
 
-  // Crear subcolecciones vacías
   const placeholder = {
     creadoEn: admin.firestore.FieldValue.serverTimestamp(),
   };
 
-  const clientesRef = negocioRef.collection("clientes").doc("_init");
-  batch.set(clientesRef, placeholder);
+  // Subcolección: clientes (ejemplo de cliente con RFC y teléfono)
+  const clienteEjemplo = {
+    telefono: "5217777884725",
+    rfc: "XAXX010101000",
+    nombre: "Joksan Ejemplo",
+    creadoEn: admin.firestore.FieldValue.serverTimestamp(),
+  };
+  const clientesRef = negocioRef
+    .collection("clientes")
+    .doc(clienteEjemplo.telefono);
+  batch.set(clientesRef, clienteEjemplo);
 
+  // Subcolección: facturas
   const facturasRef = negocioRef.collection("facturas").doc("_init");
   batch.set(facturasRef, placeholder);
 
-  const usuariosRef = negocioRef.collection("usuarios").doc("_init");
-  batch.set(usuariosRef, { ...placeholder, nombre: "Admin", rol: "admin" });
+  // Subcolección: usuarios (con admin)
+  const usuariosRef = negocioRef.collection("usuarios").doc("admin");
+  batch.set(usuariosRef, {
+    ...placeholder,
+    nombre: "Admin",
+    telefono: "5217777884725", // Número que usará para crear tickets
+    rol: "admin",
+    email: "admin@saludable.mx",
+  });
+
+  // Subcolección: tickets
+  const ticketsRef = negocioRef.collection("tickets").doc("_init");
+  batch.set(ticketsRef, placeholder);
 
   await batch.commit();
   console.log(
@@ -74,5 +94,5 @@ async function initNegocio(negocioId) {
   );
 }
 
-// Ejecutar script
+// Ejecutar
 initNegocio("saludable-test").catch(console.error);

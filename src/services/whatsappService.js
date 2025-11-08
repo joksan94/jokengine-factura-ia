@@ -112,8 +112,6 @@ const sendDocumentMessage = async (phoneNumber, mediaId, filename) => {
   }
 };
 
-// Enviar opciones múltiples (respuestas rápidas)
-// En tu whatsappService.js
 // Enviar lista interactiva
 const sendWhatsAppList = async (
   phoneNumber,

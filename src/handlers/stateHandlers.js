@@ -1,3 +1,17 @@
+// ======================
+// IMPORTS Y CONSTANTES
+// ======================
+// ======================
+// IMPORTS Y CONSTANTES (únicos y agrupados)
+// ======================
+const {
+  guardarDatosFiscalesCliente,
+  obtenerDatosFiscalesCliente,
+} = require("../services/datosFiscalesClienteService");
+const {
+  guardarRFCCliente,
+  obtenerRFCCliente,
+} = require("../services/rfcClienteService");
 const {
   sendWhatsAppMessage,
   sendWhatsAppList,
@@ -21,6 +35,578 @@ const {
 const { deleteSession } = require("../utils/sessionManager");
 const { db } = require("../config/firebase");
 
+// --- Handler para CONFIRMAR_DATOS_FISCALES_GUARDADOS ---
+async function handleConfirmarDatosFiscalesGuardados(phone, msg, session) {
+  const negocioId = session.negocio?.id;
+  const msgNorm = (msg || "").toLowerCase().replace(/\s+/g, "");
+  if (msgNorm === "usar_todo_igual") {
+    // Limpiar duplicados y unificar campos antes de guardar
+    if (session.datosFactura) {
+      session.datosFactura.regimenFiscal =
+        session.datosFactura.regimenFiscal || session.datosFactura.fiscalRegime;
+      session.datosFactura.usoCfdi =
+        session.datosFactura.usoCfdi || session.datosFactura.cfdiUse;
+      delete session.datosFactura.fiscalRegime;
+      delete session.datosFactura.cfdiUse;
+    }
+    await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+    await sendWhatsAppMessage(
+      phone,
+      "Por favor, proporciona el *folio de la venta* para facturar:"
+    );
+    session.estado = "PIDIENDO_FOLIO_VENTA";
+  } else if (msgNorm === "actualizar_rfc") {
+    await sendWhatsAppMessage(phone, "Por favor, proporciona el nuevo *RFC*:");
+    session.estado = "ACTUALIZANDO_RFC";
+  } else if (msgNorm === "actualizar_nombre") {
+    await sendWhatsAppMessage(
+      phone,
+      "Por favor, proporciona el nuevo *nombre del receptor*:"
+    );
+    session.estado = "ACTUALIZANDO_NOMBRE";
+  } else if (msgNorm === "actualizar_tipo_persona") {
+    await sendWhatsAppOptions(phone, "Selecciona el tipo de persona:", [
+      { label: "Persona Física", value: "tipo_fisica" },
+      { label: "Persona Moral", value: "tipo_moral" },
+    ]);
+    session.estado = "ACTUALIZANDO_TIPO_PERSONA";
+  } else if (msgNorm === "actualizar_regimen") {
+    const tipoPersona = session.datosFactura?.tipoPersona || "personaFisica";
+    const regimenes = Object.entries(regimenesFiscales[tipoPersona])
+      .filter(([clave]) =>
+        tipoPersona === "personaFisica"
+          ? popularesPersonaFisica.includes(clave)
+          : popularesPersonaMoral.includes(clave)
+      )
+      .slice(0, 9)
+      .map(([clave]) => ({
+        label: `Régimen ${clave}`,
+        value: `regimen_${clave}`,
+      }));
+    regimenes.push({ label: "Ayuda con mi régimen", value: "regimen_ayuda" });
+    await sendWhatsAppList(
+      phone,
+      "Selecciona el nuevo régimen fiscal:",
+      "Regímenes disponibles",
+      regimenes,
+      "Régimen Fiscal"
+    );
+    session.estado = "ACTUALIZANDO_REGIMEN";
+  } else if (msgNorm === "actualizar_uso_cfdi") {
+    // Mostrar listado de usos CFDI igual que el flujo normal
+    // Limitar a máximo 10 filas (9 usos + ayuda)
+    const usos = Object.entries(usosCfdi)
+      .slice(0, 9)
+      .map(([clave, nombre]) => ({
+        label: `Uso ${clave} - ${nombre}`,
+        value: `uso_${clave}`,
+      }));
+    usos.push({ label: "Ayuda con uso CFDI", value: "uso_ayuda" });
+    await sendWhatsAppList(
+      phone,
+      "Selecciona el nuevo uso CFDI:",
+      "Usos disponibles",
+      usos,
+      "Uso CFDI"
+    );
+    session.estado = "ACTUALIZANDO_USO_CFDI";
+  } else {
+    await sendWhatsAppMessage(
+      phone,
+      "Opción inválida. Selecciona una opción válida."
+    );
+  }
+}
+
+// ======================
+// HELPERS
+// ======================
+async function obtenerNegocioPorTelefono(phoneTo) {
+  try {
+    const negociosSnapshot = await db
+      .collection("negocios")
+      .where("telefono", "==", phoneTo)
+      .get();
+    if (negociosSnapshot.empty) {
+      throw new Error(`No se encontró un negocio con el teléfono: ${phoneTo}`);
+    }
+    const negocioDoc = negociosSnapshot.docs[0];
+    return { id: negocioDoc.id, ...negocioDoc.data() };
+  } catch (error) {
+    console.error("❌ Error al obtener negocio por teléfono:", error.message);
+    throw error;
+  }
+}
+
+async function validarAdmin(phone) {
+  const negociosSnap = await db.collection("negocios").get();
+  for (const doc of negociosSnap.docs) {
+    const negocioId = doc.id;
+    const usuariosSnap = await db
+      .collection("negocios")
+      .doc(negocioId)
+      .collection("usuarios")
+      .where("telefono", "==", phone)
+      .limit(1)
+      .get();
+    if (!usuariosSnap.empty) {
+      const usuario = usuariosSnap.docs[0].data();
+      return { negocioId, usuario };
+    }
+  }
+  return null;
+}
+
+// ======================
+// HANDLERS DE FLUJO PRINCIPAL
+// ======================
+
+// --- MENÚ Y OPCIONES INICIALES ---
+// handleMenuInicial
+// handleEsperandoOpcion
+// handleEsperandoFactura
+
+// --- CAPTURA DE DATOS FISCALES INICIAL ---
+// handlePidiendoRFC
+// handlePidiendoNombre
+// handlePidiendoTipoPersona
+// handlePidiendoFiscalRegime
+// handlePidiendoCFDIUse
+// handlePidiendoTotal
+// handleEsperandoConfirmacion
+
+// --- ACTUALIZACIÓN DE DATOS FISCALES ---
+// handleConfirmarDatosFiscalesGuardados
+// handleActualizandoRFC
+// handleActualizandoNombre
+// handleActualizandoTipoPersona
+// handleActualizandoRegimen
+// handleActualizandoUsoCFDI
+
+// --- REINTENTOS Y FLUJOS DE AYUDA ---
+// handleReintentarRegimen
+// handleReintentarCFDIUse
+
+// --- CONFIRMACIÓN DE RFC GUARDADO ---
+// handleConfirmarRFCGuardado
+
+// ======================
+// HANDLERS IMPLEMENTADOS
+// ======================
+// ...existing code...
+
+// Handlers para cada actualización individual
+async function handleActualizandoRFC(phone, msgText, session) {
+  session.datosFactura.rfc = msgText.toUpperCase();
+  // Guardar en Firestore
+  const negocioId = session.negocio?.id;
+  if (negocioId) {
+    await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+  }
+  await sendWhatsAppMessage(
+    phone,
+    "RFC actualizado. ¿Deseas actualizar otro dato o continuar?"
+  );
+  const items = [
+    { label: "Continuar con estos datos", value: "usar_todo_igual" },
+    { label: "Actualizar nombre", value: "actualizar_nombre" },
+    { label: "Actualizar régimen fiscal", value: "actualizar_regimen" },
+    { label: "Actualizar RFC", value: "actualizar_rfc" },
+    { label: "Actualizar tipo de persona", value: "actualizar_tipo_persona" },
+    { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+  ];
+  await sendWhatsAppList(
+    phone,
+    "¿Deseas actualizar otro dato o continuar?",
+    "Opciones de actualización",
+    items,
+    "Opciones"
+  );
+  session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+}
+
+async function handleActualizandoNombre(phone, msgText, session) {
+  session.datosFactura.nombre = msgText;
+  // Guardar en Firestore
+  const negocioId = session.negocio?.id;
+  if (negocioId) {
+    await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+  }
+  await sendWhatsAppMessage(
+    phone,
+    "Nombre actualizado. ¿Deseas actualizar otro dato o continuar?"
+  );
+  const items = [
+    { label: "Continuar con estos datos", value: "usar_todo_igual" },
+    { label: "Actualizar nombre", value: "actualizar_nombre" },
+    { label: "Actualizar régimen fiscal", value: "actualizar_regimen" },
+    { label: "Actualizar RFC", value: "actualizar_rfc" },
+    { label: "Actualizar tipo de persona", value: "actualizar_tipo_persona" },
+    { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+  ];
+  await sendWhatsAppList(
+    phone,
+    "¿Deseas actualizar otro dato o continuar?",
+    "Opciones de actualización",
+    items,
+    "Opciones"
+  );
+  session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+}
+
+async function handleActualizandoTipoPersona(phone, msg, session) {
+  if (msg === "tipo_fisica") {
+    session.datosFactura.tipoPersona = "Persona Física";
+  } else if (msg === "tipo_moral") {
+    session.datosFactura.tipoPersona = "Persona Moral";
+  } else {
+    await sendWhatsAppMessage(phone, "Opción inválida. Intenta nuevamente.");
+    return;
+  }
+  await sendWhatsAppMessage(
+    phone,
+    "Tipo de persona actualizado. ¿Deseas actualizar otro dato o continuar?"
+  );
+  const items = [
+    { label: "Continuar con estos datos", value: "usar_todo_igual" },
+    { label: "Actualizar nombre", value: "actualizar_nombre" },
+    { label: "Actualizar régimen fiscal", value: "actualizar_regimen" },
+    { label: "Actualizar RFC", value: "actualizar_rfc" },
+    { label: "Actualizar tipo de persona", value: "actualizar_tipo_persona" },
+    { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+  ];
+  await sendWhatsAppList(
+    phone,
+    "¿Deseas actualizar otro dato o continuar?",
+    "Opciones de actualización",
+    items,
+    "Opciones"
+  );
+  session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+}
+
+async function handleActualizandoRegimen(phone, msgText, session) {
+  if (!msgText || typeof msgText !== "string") {
+    console.log("[LOG] handleActualizandoRegimen: msgText inválido", msgText);
+    await sendWhatsAppMessage(
+      phone,
+      "Opción inválida. Selecciona un régimen fiscal del listado."
+    );
+    return;
+  }
+  console.log("[LOG] handleActualizandoRegimen: msgText recibido:", msgText);
+  let tipoPersonaRaw = session.datosFactura?.tipoPersona || "personaFisica";
+  let tipoPersona = "personaFisica";
+  if (typeof tipoPersonaRaw === "string") {
+    const norm = tipoPersonaRaw.trim().toLowerCase();
+    if (norm === "persona moral" || norm === "personamoral")
+      tipoPersona = "personaMoral";
+    else if (norm === "persona física" || norm === "personafisica")
+      tipoPersona = "personaFisica";
+    else if (norm === "personamoral") tipoPersona = "personaMoral";
+    else if (norm === "personafisica") tipoPersona = "personaFisica";
+  }
+  const catalogo = regimenesFiscales[tipoPersona];
+  console.log("[LOG] handleActualizandoRegimen: tipoPersona:", tipoPersona);
+  console.log(
+    "[LOG] handleActualizandoRegimen: catálogo:",
+    Object.keys(catalogo)
+  );
+  const labelsValidos = Object.entries(catalogo)
+    .filter(([c]) =>
+      tipoPersona === "personaFisica"
+        ? popularesPersonaFisica.includes(c)
+        : popularesPersonaMoral.includes(c)
+    )
+    .slice(0, 9)
+    .map(([c]) => `Régimen ${c}`.toLowerCase());
+  console.log("[LOG] handleActualizandoRegimen: labelsValidos:", labelsValidos);
+  if (labelsValidos.includes(msgText.trim().toLowerCase())) {
+    const match = msgText
+      .trim()
+      .toLowerCase()
+      .match(/régimen\s*(\d{3})/);
+    if (match) {
+      msgText = `regimen_${match[1]}`;
+      console.log(
+        "[LOG] handleActualizandoRegimen: msgText convertido a value:",
+        msgText
+      );
+    }
+  }
+  const limpio = msgText
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  console.log("[LOG] handleActualizandoRegimen: limpio:", limpio);
+  let clave = null;
+  if (limpio.startsWith("regimen_")) {
+    clave = limpio.replace("regimen_", "").replace(/[^0-9]/g, "");
+    console.log("[LOG] handleActualizandoRegimen: clave por value:", clave);
+  } else if (/^regimen\s*\d{3}$/.test(limpio)) {
+    const match = limpio.match(/regimen\s*(\d{3})$/);
+    if (match) clave = match[1];
+    console.log("[LOG] handleActualizandoRegimen: clave por regex 2:", clave);
+  } else if (/regimen\s*\d{3}/.test(limpio)) {
+    const match = limpio.match(/regimen\s*(\d{3})/);
+    if (match) clave = match[1];
+    console.log("[LOG] handleActualizandoRegimen: clave por regex 3:", clave);
+  } else if (/^\d{3}$/.test(limpio)) {
+    clave = limpio;
+    console.log(
+      "[LOG] handleActualizandoRegimen: clave por solo número:",
+      clave
+    );
+  } else {
+    const match = limpio.match(/(\d{3})/);
+    if (match) clave = match[1];
+    console.log("[LOG] handleActualizandoRegimen: clave por regex 5:", clave);
+  }
+  if (!clave) {
+    let tipoPersonaRaw = session.datosFactura?.tipoPersona || "personaFisica";
+    let tipoPersona = "personaFisica";
+    if (typeof tipoPersonaRaw === "string") {
+      const norm = tipoPersonaRaw.trim().toLowerCase();
+      if (norm === "persona moral" || norm === "personamoral")
+        tipoPersona = "personaMoral";
+      else if (norm === "persona física" || norm === "personafisica")
+        tipoPersona = "personaFisica";
+      else if (norm === "personamoral") tipoPersona = "personaMoral";
+      else if (norm === "personafisica") tipoPersona = "personaFisica";
+    }
+    const catalogo = regimenesFiscales[tipoPersona];
+    for (const [k, v] of Object.entries(catalogo)) {
+      const nombreRegimen = v
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      if (limpio === nombreRegimen) {
+        clave = k;
+        console.log(
+          "[LOG] handleActualizandoRegimen: clave por nombreRegimen:",
+          clave
+        );
+        break;
+      }
+    }
+    console.log(
+      "[LOG] handleActualizandoRegimen: clave después de buscar por nombre:",
+      clave
+    );
+  }
+  if (clave) clave = String(clave).trim();
+  console.log(
+    "[LOG] handleActualizandoRegimen: clave final antes de validar:",
+    clave
+  );
+  if (clave && clave.length === 3 && /^[0-9]{3}$/.test(clave)) {
+    if (clave)
+      clave = String(clave)
+        .replace(/[^0-9]/g, "")
+        .trim();
+    console.log("[LOG] handleActualizandoRegimen: clave validada:", clave);
+    if (!clave || clave.length !== 3 || !catalogo[clave]) {
+      console.log(
+        "[LOG] handleActualizandoRegimen: clave recibida:",
+        clave,
+        "| catálogo:",
+        Object.keys(catalogo)
+      );
+      let motivo = "";
+      if (!clave) motivo = "No se pudo extraer el número de régimen.";
+      else if (!catalogo[clave])
+        motivo = `El régimen ${clave} no está en el catálogo.`;
+      await sendWhatsAppMessage(
+        phone,
+        `Opción inválida. ${motivo} Selecciona un régimen fiscal del listado.`
+      );
+      const regimenes = Object.entries(catalogo).map(([c]) => ({
+        label: `Régimen ${c} - ${catalogo[c]}`,
+        value: `regimen_${c}`,
+      }));
+      regimenes.push({ label: "Ayuda con mi régimen", value: "regimen_ayuda" });
+      await sendWhatsAppList(
+        phone,
+        "Selecciona el régimen fiscal:",
+        "Regímenes disponibles",
+        regimenes,
+        "Régimen Fiscal"
+      );
+      session.estado = "PIDIENDO_FISCALREGIME";
+      return;
+    }
+    session.datosFactura.regimenFiscal = clave;
+    delete session.datosFactura.fiscalRegime;
+    const negocioId = session.negocio?.id;
+    if (negocioId) {
+      await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+    }
+    const resumen =
+      `Ya tenemos tus datos fiscales guardados:\n` +
+      `RFC: ${session.datosFactura.rfc}\n` +
+      `Nombre: ${session.datosFactura.nombre}\n` +
+      `Tipo de persona: ${session.datosFactura.tipoPersona}\n` +
+      `Régimen Fiscal: ${session.datosFactura.regimenFiscal}\n` +
+      `Uso CFDI: ${session.datosFactura.usoCfdi}\n`;
+    await sendWhatsAppMessage(phone, resumen);
+    const items = [
+      { label: "Usar estos datos", value: "usar_todo_igual" },
+      { label: "Actualizar nombre", value: "actualizar_nombre" },
+      { label: "régimen fiscal", value: "actualizar_regimen" },
+      { label: "Actualizar RFC", value: "actualizar_rfc" },
+      { label: "tipo de persona", value: "actualizar_tipo_persona" },
+      { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+    ];
+    await sendWhatsAppList(
+      phone,
+      "¿Qué deseas hacer?",
+      "Opciones de actualización",
+      items,
+      "Opciones"
+    );
+    session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+  }
+}
+
+async function handleActualizandoUsoCFDI(phone, msgText, session) {
+  console.log("[LOG] handleActualizandoUsoCFDI: msgText recibido:", msgText);
+  let limpio = (msgText || "")
+    .trim()
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+  console.log("[LOG] handleActualizandoUsoCFDI: limpio:", limpio);
+  let clave = null;
+  if (limpio.startsWith("uso_")) {
+    clave = limpio.replace("uso_", "").toUpperCase();
+    console.log("[LOG] handleActualizandoUsoCFDI: clave por value:", clave);
+  } else if (/^g0[1-3]$|^i0[1-4]$|^d0[1-4]$|^p01$|^s01$/.test(limpio)) {
+    clave = limpio.toUpperCase();
+    console.log("[LOG] handleActualizandoUsoCFDI: clave por regex:", clave);
+  } else {
+    // Buscar por nombre
+    for (const [k, v] of Object.entries(usosCfdi)) {
+      const nombreUso = v
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "");
+      if (limpio === nombreUso || limpio.includes(nombreUso)) {
+        clave = k;
+        console.log(
+          "[LOG] handleActualizandoUsoCFDI: clave por nombreUso:",
+          clave
+        );
+        break;
+      }
+    }
+  }
+  console.log(
+    "[LOG] handleActualizandoUsoCFDI: clave final antes de validar:",
+    clave
+  );
+  if (clave && usosCfdi[clave]) {
+    session.datosFactura.usoCfdi = clave;
+    delete session.datosFactura.cfdiUse;
+    // Guardar en Firestore
+    const negocioId = session.negocio?.id;
+    if (negocioId) {
+      await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+    }
+    await sendWhatsAppMessage(
+      phone,
+      `✅ Uso CFDI actualizado: ${clave} - ${usosCfdi[clave]}\n¿Deseas actualizar otro dato o continuar?`
+    );
+    const items = [
+      { label: "Continuar con estos datos", value: "usar_todo_igual" },
+      { label: "Actualizar nombre", value: "actualizar_nombre" },
+      { label: "Actualizar régimen fiscal", value: "actualizar_regimen" },
+      { label: "Actualizar RFC", value: "actualizar_rfc" },
+      { label: "Actualizar tipo de persona", value: "actualizar_tipo_persona" },
+      { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+    ];
+    await sendWhatsAppList(
+      phone,
+      "¿Deseas actualizar otro dato o continuar?",
+      "Opciones de actualización",
+      items,
+      "Opciones"
+    );
+    session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+  } else {
+    let motivo = "";
+    if (!clave) motivo = "No se pudo extraer la clave de uso CFDI.";
+    else if (!usosCfdi[clave])
+      motivo = `El uso CFDI ${clave} no está en el catálogo.`;
+    await sendWhatsAppMessage(
+      phone,
+      `Opción inválida. ${motivo} Selecciona un uso CFDI del listado.`
+    );
+    const usos = Object.entries(usosCfdi).map(([c, v]) => ({
+      label: `Uso ${c} - ${v}`,
+      value: `uso_${c}`,
+    }));
+    usos.push({ label: "Ayuda con uso CFDI", value: "uso_ayuda" });
+    await sendWhatsAppList(
+      phone,
+      "Selecciona el uso CFDI:",
+      "Usos disponibles",
+      usos,
+      "Uso CFDI"
+    );
+    session.estado = "ACTUALIZANDO_USO_CFDI";
+  }
+}
+// --- FIN DE IMPORTS ---
+
+// ======================
+// HANDLERS IMPLEMENTADOS
+// ======================
+
+async function handleConfirmarRFCGuardado(phone, msg, session) {
+  const negocioId = session.negocio?.id;
+  const msgNorm = (msg || "").toLowerCase().replace(/\s+/g, "");
+  console.log(
+    "[handleConfirmarRFCGuardado] msg recibido:",
+    msg,
+    "| normalizado:",
+    msgNorm
+  );
+  const rfcGuardado = await obtenerRFCCliente(negocioId, phone);
+  if (rfcGuardado) {
+    session.datosFactura.rfc = rfcGuardado;
+    await sendWhatsAppMessage(
+      phone,
+      "Perfecto, continuamos con tu RFC guardado: *" +
+        session.datosFactura.rfc +
+        "*\nAhora proporciona el nombre del receptor:"
+    );
+    session.estado = "PIDIENDO_NOMBRE";
+  } else if (msgNorm === "actualizar_rfc") {
+    // Actualizar RFC en Firestore
+    const nuevoRFC = session.datosFactura.rfc;
+    if (!negocioId) {
+      await sendWhatsAppMessage(
+        phone,
+        "No se pudo identificar el negocio. Intenta más tarde."
+      );
+      return;
+    }
+    await guardarRFCCliente(negocioId, phone, nuevoRFC);
+    await sendWhatsAppMessage(
+      phone,
+      "✅ RFC actualizado correctamente. Ahora proporciona el nombre del receptor:"
+    );
+    session.estado = "PIDIENDO_NOMBRE";
+  } else {
+    await sendWhatsAppMessage(
+      phone,
+      "Opción inválida. Selecciona una opción válida."
+    );
+  }
+}
+// ...imports ya agrupados arriba...
+
 async function obtenerNegocioPorTelefono(phoneTo) {
   try {
     const negociosSnapshot = await db
@@ -40,6 +626,28 @@ async function obtenerNegocioPorTelefono(phoneTo) {
   }
 }
 
+async function validarAdmin(phone) {
+  const negociosSnap = await db.collection("negocios").get();
+
+  for (const doc of negociosSnap.docs) {
+    const negocioId = doc.id;
+    const usuariosSnap = await db
+      .collection("negocios")
+      .doc(negocioId)
+      .collection("usuarios")
+      .where("telefono", "==", phone)
+      .limit(1)
+      .get();
+
+    if (!usuariosSnap.empty) {
+      const usuario = usuariosSnap.docs[0].data();
+      return { negocioId, usuario };
+    }
+  }
+
+  return null; // No es un usuario interno
+}
+
 async function handleMenuInicial(phone, session, phoneTo) {
   try {
     // Validar el número de teléfono del negocio
@@ -50,14 +658,14 @@ async function handleMenuInicial(phone, session, phoneTo) {
     session.negocio = negocio;
     console.log("✅ Negocio guardado en la sesión:", session.negocio);
 
-    // Continuar con el flujo después de validar el negocio
-    await sendWhatsAppMessage(
+    // Enviar mensaje de bienvenida con botones
+    await sendWhatsAppOptions(
       phone,
-      `Hola, bienvenido a ${negocio.nombre}.\n` +
-        `¿Qué deseas hacer?\n` +
-        `1️⃣ Consultar factura (no implementado)\n` +
-        `2️⃣ Generar factura\n\n` +
-        `Por favor responde con 1 o 2.`
+      `👋 ¡Hola! Bienvenido a ${negocio.nombre}.\n¿Qué deseas hacer hoy?`,
+      [
+        { label: "Consultar facturas", value: "1" },
+        { label: "Generar factura", value: "2" },
+      ]
     );
 
     session.estado = "ESPERANDO_OPCION";
@@ -95,24 +703,25 @@ async function handleEsperandoOpcion(phone, msg, session) {
           "No se encontraron facturas asociadas a tu número de teléfono."
         );
       } else {
-        // Construir la lista de facturas
-        const listaFacturas = facturas
-          .slice(0, 10) // Limitar a las primeras 10 facturas
-          .map(
-            (factura, index) =>
-              `${index + 1}. Folio: ${
-                factura.folio
-              }, Total: $${factura.total.toFixed(2)}, Fecha: ${factura.fecha
-                .toDate()
-                .toLocaleDateString()}`
-          )
-          .join("\n");
-
-        await sendWhatsAppMessage(
+        // Folio y total juntos en el label para máxima visibilidad
+        const items = facturas.slice(0, 10).map((factura, index) => {
+          const folio = factura.folio;
+          const total = factura.total.toLocaleString("es-MX", {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          });
+          return {
+            label: `${folio} $${total}`,
+            value: `factura_${index}`,
+          };
+        });
+        await sendWhatsAppList(
           phone,
-          `📄 Tus facturas:\n\n${listaFacturas}\n\nResponde con el número de la factura para descargar el PDF.`
+          "Selecciona la factura que deseas descargar:",
+          "Tus facturas",
+          items,
+          "Facturas"
         );
-
         session.facturas = facturas; // Guardar las facturas en la sesión
         session.estado = "ESPERANDO_FACTURA";
       }
@@ -124,20 +733,235 @@ async function handleEsperandoOpcion(phone, msg, session) {
       );
     }
   } else if (msg === "2" || msg.includes("generar")) {
-    await sendWhatsAppMessage(
-      phone,
-      "Por favor proporciona el RFC del receptor:"
-    );
-    session.estado = "PIDIENDO_RFC";
+    // Validar datos fiscales guardados en clientes del negocio antes de pedirlos
+    const negocioId = session.negocio?.id;
+    if (!negocioId) {
+      await sendWhatsAppMessage(
+        phone,
+        "No se pudo identificar el negocio. Intenta más tarde."
+      );
+      return;
+    }
+    const datosGuardados = await obtenerDatosFiscalesCliente(negocioId, phone);
+    // Unificar nombres de campos para aceptar ambos posibles (cfdiUse/usoCfdi y fiscalRegime/regimenFiscal)
+    const rfc = datosGuardados?.rfc;
+    const nombre = datosGuardados?.nombre;
+    const tipoPersona = datosGuardados?.tipoPersona;
+    const regimenFiscal =
+      datosGuardados?.regimenFiscal || datosGuardados?.fiscalRegime;
+    const usoCfdi = datosGuardados?.usoCfdi || datosGuardados?.cfdiUse;
+    if (rfc && nombre && tipoPersona && regimenFiscal && usoCfdi) {
+      // Mostrar resumen y opciones
+      const resumen =
+        `Ya tenemos tus datos fiscales guardados:\n` +
+        `RFC: ${rfc}\n` +
+        `Nombre: ${nombre}\n` +
+        `Tipo de persona: ${tipoPersona}\n` +
+        `Régimen Fiscal: ${regimenFiscal}\n` +
+        `Uso CFDI: ${usoCfdi}\n`;
+      await sendWhatsAppMessage(phone, resumen);
+      const items = [
+        { label: "Usar estos datos", value: "usar_todo_igual" },
+        { label: "Actualizar nombre", value: "actualizar_nombre" },
+        { label: "régimen fiscal", value: "actualizar_regimen" },
+        { label: "Actualizar RFC", value: "actualizar_rfc" },
+        {
+          label: "tipo de persona",
+          value: "actualizar_tipo_persona",
+        },
+        { label: "Actualizar uso CFDI", value: "actualizar_uso_cfdi" },
+      ];
+      await sendWhatsAppList(
+        phone,
+        "¿Qué deseas hacer?",
+        "Opciones de actualización",
+        items,
+        "Opciones"
+      );
+      session.datosFactura = {
+        rfc,
+        nombre,
+        tipoPersona,
+        regimenFiscal,
+        usoCfdi,
+      };
+      session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
+    } else {
+      // Preguntar solo por los datos faltantes
+      session.datosFactura = session.datosFactura || {};
+      if (!datosGuardados || !datosGuardados.rfc) {
+        await sendWhatsAppMessage(
+          phone,
+          "Por favor, proporciona tu *RFC* para continuar con la factura:"
+        );
+        session.estado = "PIDIENDO_RFC";
+      } else if (!datosGuardados.nombre) {
+        session.datosFactura.rfc = datosGuardados.rfc;
+        await sendWhatsAppMessage(
+          phone,
+          "Por favor, proporciona el *nombre del receptor* para la factura:"
+        );
+        session.estado = "PIDIENDO_NOMBRE";
+      } else if (!tipoPersona && rfc && nombre && regimenFiscal && usoCfdi) {
+        // Si solo falta tipoPersona, pedir solo ese campo
+        session.datosFactura = {
+          rfc,
+          nombre,
+          regimenFiscal,
+          usoCfdi,
+        };
+        await sendWhatsAppOptions(phone, "Selecciona el tipo de persona:", [
+          { label: "Persona Física", value: "tipo_fisica" },
+          { label: "Persona Moral", value: "tipo_moral" },
+        ]);
+        session.estado = "PIDIENDO_TIPO_PERSONA";
+      } else if (!datosGuardados.regimenFiscal) {
+        session.datosFactura.rfc = datosGuardados.rfc;
+        session.datosFactura.nombre = datosGuardados.nombre;
+        session.datosFactura.tipoPersona = datosGuardados.tipoPersona;
+        // Mostrar lista de regímenes fiscales
+        const regimenes = Object.entries(
+          regimenesFiscales[
+            datosGuardados.tipoPersona === "personaFisica"
+              ? "personaFisica"
+              : "personaMoral"
+          ]
+        )
+          .filter(([clave]) =>
+            datosGuardados.tipoPersona === "personaFisica"
+              ? popularesPersonaFisica.includes(clave)
+              : popularesPersonaMoral.includes(clave)
+          )
+          .slice(0, 9)
+          .map(([clave]) => ({
+            label: `Régimen ${clave}`,
+            value: `regimen_${clave}`,
+          }));
+        regimenes.push({
+          label: "Ayuda con mi régimen",
+          value: "regimen_ayuda",
+        });
+        await sendWhatsAppList(
+          phone,
+          "Selecciona el régimen fiscal:",
+          "Regímenes disponibles",
+          regimenes,
+          "Régimen Fiscal"
+        );
+        session.estado = "PIDIENDO_FISCALREGIME";
+      } else if (!datosGuardados.usoCfdi && !datosGuardados.cfdiUse) {
+        session.datosFactura.rfc = datosGuardados.rfc;
+        session.datosFactura.nombre = datosGuardados.nombre;
+        session.datosFactura.tipoPersona = datosGuardados.tipoPersona;
+        session.datosFactura.regimenFiscal =
+          datosGuardados.regimenFiscal || datosGuardados.fiscalRegime;
+        // Aquí podrías mostrar la lista de usos CFDI
+        // ...
+        session.estado = "PIDIENDO_CFDIUSE";
+      }
+    }
   } else {
-    await sendWhatsAppMessage(phone, "Opción no válida. Responde 1 o 2.");
+    // Si el usuario está en ESPERANDO_FACTURA, mostrar la lista de facturas
+    if (
+      session.estado === "ESPERANDO_FACTURA" &&
+      session.facturas &&
+      session.facturas.length > 0
+    ) {
+      await sendWhatsAppMessage(
+        phone,
+        "Opción inválida. Por favor selecciona una factura del listado."
+      );
+      const items = session.facturas.slice(0, 10).map((factura, index) => {
+        const folio = factura.folio;
+        const total = factura.total.toLocaleString("es-MX", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        return {
+          label: `${folio} $${total}`,
+          value: `factura_${index}`,
+        };
+      });
+      await sendWhatsAppList(
+        phone,
+        "Selecciona la factura que deseas descargar:",
+        "Tus facturas",
+        items,
+        "Facturas"
+      );
+    } else {
+      await sendWhatsAppMessage(
+        phone,
+        "Opción no válida. Por favor selecciona una opción del menú."
+      );
+      await sendWhatsAppOptions(
+        phone,
+        "👋 ¡Hola! Bienvenido a " +
+          (session.negocio?.nombre || "el negocio") +
+          ".\n¿Qué deseas hacer hoy?",
+        [
+          { label: "Consultar facturas", value: "1" },
+          { label: "Generar factura", value: "2" },
+        ]
+      );
+    }
   }
 }
+// const { guardarRFCCliente, obtenerRFCCliente } = require("../services/rfcClienteService");
 
 async function handlePidiendoRFC(phone, msgText, session) {
-  session.datosFactura.rfc = msgText.toUpperCase();
-  await sendWhatsAppMessage(phone, "Ahora proporciona el nombre del receptor:");
-  session.estado = "PIDIENDO_NOMBRE";
+  try {
+    const rfc = msgText.toUpperCase();
+    session.datosFactura.rfc = rfc;
+    const negocioId = session.negocio?.id;
+    if (!negocioId) {
+      await sendWhatsAppMessage(
+        phone,
+        "No se pudo identificar el negocio. Intenta más tarde."
+      );
+      return;
+    }
+    // Buscar si ya existe el RFC para este cliente en el negocio
+    const rfcGuardado = await obtenerRFCCliente(negocioId, phone);
+    if (!rfcGuardado) {
+      // Primera vez: guardar RFC
+      await guardarRFCCliente(negocioId, phone, rfc);
+      await sendWhatsAppMessage(
+        phone,
+        "✅ RFC guardado correctamente. Ahora proporciona el nombre del receptor:"
+      );
+      session.estado = "PIDIENDO_NOMBRE";
+    } else if (rfcGuardado === rfc) {
+      // Ya existe y es el mismo
+      await sendWhatsAppMessage(
+        phone,
+        "Ya tenemos tu RFC registrado. ¿Deseas actualizarlo o continuar con el actual?"
+      );
+      await sendWhatsAppOptions(phone, "Selecciona una opción:", [
+        { label: "Continuar con este RFC", value: "continuar_rfc" },
+        { label: "Actualizar RFC", value: "actualizar_rfc" },
+      ]);
+      session.estado = "CONFIRMAR_RFC_GUARDADO";
+    } else {
+      // Ya existe pero es diferente
+      await sendWhatsAppMessage(
+        phone,
+        `Ya tienes un RFC guardado: *${rfcGuardado}*. ¿Deseas actualizarlo por el nuevo?`
+      );
+      await sendWhatsAppOptions(phone, "Selecciona una opción:", [
+        { label: "Sí, actualizar RFC", value: "actualizar_rfc" },
+        { label: "No, mantener el anterior", value: "mantener_rfc" },
+      ]);
+      session.estado = "CONFIRMAR_RFC_GUARDADO";
+    }
+  } catch (error) {
+    console.error("[handlePidiendoRFC] Error:", error);
+    await sendWhatsAppMessage(
+      phone,
+      "❌ Error al guardar o consultar tu RFC. Intenta más tarde."
+    );
+  }
+  // --- Fin de handlePidiendoRFC ---
 }
 
 async function handlePidiendoNombre(phone, msgText, session) {
@@ -151,19 +975,57 @@ async function handlePidiendoNombre(phone, msgText, session) {
 
 async function handlePidiendoTipoPersona(phone, msg, session) {
   if (msg === "tipo_fisica") {
-    session.tipoPersona = "personaFisica";
-  } else if (msg === "tipo_moral") {
-    session.tipoPersona = "personaMoral";
-  } else {
-    await sendWhatsAppMessage(phone, "Opción inválida. Intenta nuevamente.");
+    if (!msgText || typeof msgText !== "string") {
+      await sendWhatsAppMessage(
+        phone,
+        "Opción inválida. Selecciona un régimen fiscal del listado."
+      );
+      return;
+    }
+    // Determinar tipoPersona y catálogo solo una vez
+    let tipoPersonaRaw = session.datosFactura?.tipoPersona || "personaFisica";
+    let tipoPersona = "personaFisica";
+    if (typeof tipoPersonaRaw === "string") {
+      const norm = tipoPersonaRaw.trim().toLowerCase();
+      if (norm === "persona moral" || norm === "personamoral")
+        tipoPersona = "personaMoral";
+      else if (norm === "persona física" || norm === "personafisica")
+        tipoPersona = "personaFisica";
+      else if (norm === "personamoral") tipoPersona = "personaMoral";
+      else if (norm === "personafisica") tipoPersona = "personaFisica";
+    }
+    const catalogo = regimenesFiscales[tipoPersona];
+    // Generar los labels válidos
+    const labelsValidos = Object.entries(catalogo)
+      .filter(([c]) =>
+        tipoPersona === "personaFisica"
+          ? popularesPersonaFisica.includes(c)
+          : popularesPersonaMoral.includes(c)
+      )
+      .slice(0, 9)
+      .map(([c]) => `Régimen ${c}`.toLowerCase());
+    // Si el texto coincide con algún label, convertirlo al value
+    if (labelsValidos.includes(msgText.trim().toLowerCase())) {
+      const match = msgText
+        .trim()
+        .toLowerCase()
+        .match(/régimen\s*(\d{3})/);
+      if (match) {
+        msgText = `regimen_${match[1]}`;
+      }
+    }
+    session.estado = "CONFIRMAR_DATOS_FISCALES_GUARDADOS";
     return;
   }
 
+  // Si no, continuar con el flujo normal
   session.estado = "PIDIENDO_FISCALREGIME";
 
-  const regimenes = Object.entries(regimenesFiscales[session.tipoPersona])
+  const regimenes = Object.entries(
+    regimenesFiscales[session.datosFactura.tipoPersona]
+  )
     .filter(([clave]) =>
-      session.tipoPersona === "personaFisica"
+      session.datosFactura.tipoPersona === "personaFisica"
         ? popularesPersonaFisica.includes(clave)
         : popularesPersonaMoral.includes(clave)
     )
@@ -174,7 +1036,7 @@ async function handlePidiendoTipoPersona(phone, msg, session) {
     }));
 
   regimenes.push({
-    label: "No sé cuál es mi régimen",
+    label: "Ayuda con mi régimen",
     value: "regimen_ayuda",
   });
 
@@ -208,9 +1070,17 @@ async function handlePidiendoFiscalRegime(phone, msg, session) {
   }
 
   const claveRegimen = msg.replace("regimen_", "").toUpperCase();
-  const descripcionRegimen =
-    regimenesFiscales[session.tipoPersona][claveRegimen];
-
+  // Usar el tipoPersona correcto desde datosFactura
+  const tipoPersona = session.datosFactura.tipoPersona;
+  if (!tipoPersona || !regimenesFiscales[tipoPersona]) {
+    await sendWhatsAppMessage(
+      phone,
+      "Error: tipo de persona no definido. Por favor selecciona el tipo de persona primero."
+    );
+    session.estado = "PIDIENDO_TIPO_PERSONA";
+    return;
+  }
+  const descripcionRegimen = regimenesFiscales[tipoPersona][claveRegimen];
   if (!descripcionRegimen) {
     await sendWhatsAppMessage(
       phone,
@@ -218,8 +1088,9 @@ async function handlePidiendoFiscalRegime(phone, msg, session) {
     );
     return;
   }
-
-  session.datosFactura.fiscalRegime = claveRegimen;
+  session.datosFactura.regimenFiscal = claveRegimen;
+  // Eliminar duplicado si existe
+  delete session.datosFactura.fiscalRegime;
 
   await sendWhatsAppMessage(
     phone,
@@ -236,7 +1107,7 @@ async function handlePidiendoFiscalRegime(phone, msg, session) {
     }));
 
   usos.push({
-    label: "No sé cuál es el uso CFDI",
+    label: "No sé mi CFDI",
     value: "uso_ayuda",
   });
 
@@ -279,7 +1150,18 @@ async function handlePidiendoCFDIUse(phone, msg, session) {
     return;
   }
 
-  session.datosFactura.cfdiUse = claveUso;
+  session.datosFactura.usoCfdi = claveUso;
+  // Eliminar duplicado si existe
+  delete session.datosFactura.cfdiUse;
+
+  // Guardar todos los datos fiscales en Firestore al terminar la captura inicial
+  const negocioId = session.negocio?.id;
+  if (negocioId) {
+    const {
+      guardarDatosFiscalesCliente,
+    } = require("../services/datosFiscalesClienteService");
+    await guardarDatosFiscalesCliente(negocioId, phone, session.datosFactura);
+  }
 
   await sendWhatsAppMessage(
     phone,
@@ -291,29 +1173,34 @@ async function handlePidiendoCFDIUse(phone, msg, session) {
 }
 
 async function handlePidiendoTotal(phone, msgText, session) {
-  const totalNum = parseFloat(msgText.replace(/[^0-9.]/g, "").trim());
+  console.log("[LOG] handlePidiendoTotal: msgText recibido:", msgText);
+  const totalNum = parseFloat((msgText || "").replace(/[^0-9.]/g, "").trim());
   if (isNaN(totalNum) || totalNum <= 0) {
+    console.log("[LOG] handlePidiendoTotal: total inválido:", msgText);
     await sendWhatsAppMessage(
       phone,
       "Por favor ingresa un número válido para el total."
     );
+    // Mantener el estado para que el usuario vuelva a intentar
+    session.estado = "PIDIENDO_TOTAL";
     return;
   }
   session.datosFactura.total = totalNum;
-  await sendWhatsAppMessage(
-    phone,
+  const resumen =
     `Resumen de factura:\n` +
-      `RFC: ${session.datosFactura.rfc}\n` +
-      `Nombre: ${session.datosFactura.nombre}\n` +
-      `Régimen Fiscal: ${session.datosFactura.fiscalRegime}\n` +
-      `Uso CFDI: ${session.datosFactura.cfdiUse}\n` +
-      `Total: $${session.datosFactura.total.toFixed(2)}\n\n` +
-      `Responde CONFIRMAR para generar la factura o CANCELAR para abortar.`
-  );
+    `RFC: ${session.datosFactura.rfc}\n` +
+    `Nombre: ${session.datosFactura.nombre}\n` +
+    `Régimen Fiscal: ${session.datosFactura.fiscalRegime}\n` +
+    `Uso CFDI: ${session.datosFactura.cfdiUse}\n` +
+    `Total: $${session.datosFactura.total.toFixed(2)}\n\n`;
+  await sendWhatsAppOptions(phone, resumen + "¿Qué deseas hacer?", [
+    { label: "CONFIRMAR", value: "confirmar" },
+    { label: "CANCELAR", value: "cancelar" },
+  ]);
   session.estado = "ESPERANDO_CONFIRMACION";
 }
 
-async function handleEsperandoConfirmacion(phone, msg, session, phoneTo) {
+async function handleEsperandoConfirmacion(phone, msg, session) {
   if (msg === "confirmar") {
     const datosFactura = session.datosFactura;
     const negocio = session.negocio; // Obtener el negocio desde la sesión
@@ -350,17 +1237,24 @@ async function handleEsperandoConfirmacion(phone, msg, session, phoneTo) {
 
       console.log(`📄 Generando factura con folio: ${nuevoFolio}`);
 
+      // Unificar campos para Facturama
+      // Unificar y limpiar campos antes de enviar a Facturama
+      const CfdiUse = datosFactura.usoCfdi || datosFactura.cfdiUse;
+      const FiscalRegime =
+        datosFactura.regimenFiscal || datosFactura.fiscalRegime;
+      const receiver = {
+        Rfc: datosFactura.rfc,
+        CfdiUse,
+        Name: datosFactura.nombre,
+        FiscalRegime,
+        TaxZipCode: negocio.codigoPostal || "78000",
+      };
+
       // Generar la factura
       const factura = await generarFactura(
         negocio,
         {
-          Receiver: {
-            Rfc: datosFactura.rfc,
-            CfdiUse: datosFactura.cfdiUse,
-            Name: datosFactura.nombre,
-            FiscalRegime: datosFactura.fiscalRegime,
-            TaxZipCode: negocio.codigoPostal || "78000", // Usar datos del negocio
-          },
+          Receiver: receiver,
           Total: datosFactura.total,
         },
         "Servicio vía WhatsApp"
@@ -394,18 +1288,50 @@ async function handleEsperandoConfirmacion(phone, msg, session, phoneTo) {
         `✅ Factura generada con folio: ${factura.Folio || factura.Id}`
       );
 
+      // Si hay ticket de Airtable en sesión, actualizar estado de facturación
+      if (session.ticketAirtable && session.ticketAirtable.Folio) {
+        try {
+          const {
+            actualizarEstadoFacturacion,
+          } = require("../services/airtableUpdateService");
+          await actualizarEstadoFacturacion(
+            session.ticketAirtable.Folio,
+            "Facturado"
+          );
+          console.log(
+            `✅ Estado de facturación actualizado en Airtable para folio ${session.ticketAirtable.Folio}`
+          );
+        } catch (err) {
+          console.error(
+            "❌ Error actualizando estado de facturación en Airtable:",
+            err
+          );
+        }
+      }
+
       deleteSession(phone);
     } catch (error) {
       console.error("❌ Error generando factura:", error);
 
       let mensaje = "❌ Ocurrió un error generando la factura.";
 
-      if (error.ModelState) {
+      if (
+        error.response &&
+        error.response.data &&
+        error.response.data.Message
+      ) {
+        // Si el error viene del endpoint y contiene un mensaje en data.Message
+        mensaje += `\n\nDetalles del error: ${error.response.data.Message}`;
+      } else if (error.ModelState) {
+        // Si el error contiene un ModelState
         const detalles = Object.values(error.ModelState).flat().join("\n");
         mensaje += `\n\nDetalles:\n${detalles}`;
       } else if (error.message) {
+        // Si el error contiene un mensaje general
         mensaje += `\n\n${error.message}`;
       }
+
+      console.error(mensaje);
 
       await sendWhatsAppMessage(phone, mensaje);
 
@@ -489,7 +1415,7 @@ async function handleReintentarCFDIUse(phone, msg, session) {
       }));
 
     usos.push({
-      label: "❓ No sé cuál es el uso CFDI",
+      label: "Ayuda con uso CFDI",
       value: "uso_ayuda",
     });
 
@@ -522,22 +1448,41 @@ async function handleEsperandoFactura(phone, msg, session) {
 
     console.log("📄 Facturas en la sesión:", session.facturas);
 
-    // Validar la selección del usuario
-    const seleccion = parseInt(msg.trim(), 10);
-    if (
-      isNaN(seleccion) ||
-      seleccion < 1 ||
-      seleccion > session.facturas.length
-    ) {
-      console.error("❌ Selección inválida:", seleccion);
+    // Validar la selección del usuario (por valor del listado)
+    let facturaSeleccionada = null;
+    if (msg.startsWith("factura_")) {
+      const index = parseInt(msg.replace("factura_", ""), 10);
+      if (!isNaN(index) && index >= 0 && index < session.facturas.length) {
+        facturaSeleccionada = session.facturas[index];
+      }
+    }
+    if (!facturaSeleccionada) {
+      console.error("❌ Selección inválida:", msg);
       await sendWhatsAppMessage(
         phone,
-        "Opción inválida. Por favor responde con el número de la factura que deseas descargar."
+        "Opción inválida. Por favor selecciona una factura del listado."
+      );
+      // Volver a mostrar la lista de facturas
+      const items = session.facturas.slice(0, 10).map((factura, index) => {
+        const folio = factura.folio;
+        const total = factura.total.toLocaleString("es-MX", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        });
+        return {
+          label: `${folio} $${total}`,
+          value: `factura_${index}`,
+        };
+      });
+      await sendWhatsAppList(
+        phone,
+        "Selecciona la factura que deseas descargar:",
+        "Tus facturas",
+        items,
+        "Facturas"
       );
       return;
     }
-
-    const facturaSeleccionada = session.facturas[seleccion - 1];
     console.log("✅ Factura seleccionada:", facturaSeleccionada);
 
     // Validar que el facturaId esté definido
@@ -589,68 +1534,6 @@ async function handleEsperandoFactura(phone, msg, session) {
   }
 }
 
-async function handleEsperandoOpcion(phone, msg, session) {
-  if (msg === "1" || msg.includes("consultar")) {
-    const negocio = session.negocio; // Obtener el negocio desde la sesión
-
-    if (!negocio) {
-      console.error("❌ No se encontró información del negocio en la sesión.");
-      await sendWhatsAppMessage(
-        phone,
-        "❌ No se pudo identificar el negocio. Por favor, reinicia el flujo."
-      );
-      return;
-    }
-
-    try {
-      // Obtener las facturas del usuario
-      const facturas = await obtenerFacturasPorUsuario(phone, negocio.id);
-
-      if (facturas.length === 0) {
-        await sendWhatsAppMessage(
-          phone,
-          "No se encontraron facturas asociadas a tu número de teléfono."
-        );
-      } else {
-        // Construir la lista de facturas
-        const listaFacturas = facturas
-          .slice(0, 10) // Limitar a las primeras 10 facturas
-          .map(
-            (factura, index) =>
-              `${index + 1}. Folio: ${
-                factura.folio
-              }, Total: $${factura.total.toFixed(2)}, Fecha: ${factura.fecha
-                .toDate()
-                .toLocaleDateString()}`
-          )
-          .join("\n");
-
-        await sendWhatsAppMessage(
-          phone,
-          `📄 Tus facturas:\n\n${listaFacturas}\n\nResponde con el número de la factura para descargar el PDF.`
-        );
-
-        session.facturas = facturas; // Guardar las facturas en la sesión
-        session.estado = "ESPERANDO_FACTURA";
-      }
-    } catch (error) {
-      console.error("❌ Error al consultar facturas:", error.message);
-      await sendWhatsAppMessage(
-        phone,
-        "❌ Ocurrió un error al consultar tus facturas. Por favor intenta más tarde."
-      );
-    }
-  } else if (msg === "2" || msg.includes("generar")) {
-    await sendWhatsAppMessage(
-      phone,
-      "Por favor proporciona el RFC del receptor:"
-    );
-    session.estado = "PIDIENDO_RFC";
-  } else {
-    await sendWhatsAppMessage(phone, "Opción no válida. Responde 1 o 2.");
-  }
-}
-
 module.exports = {
   handleMenuInicial,
   handleEsperandoOpcion,
@@ -664,4 +1547,11 @@ module.exports = {
   handleReintentarRegimen,
   handleReintentarCFDIUse,
   handleEsperandoFactura,
+  handleConfirmarRFCGuardado,
+  handleConfirmarDatosFiscalesGuardados,
+  handleActualizandoRFC,
+  handleActualizandoNombre,
+  handleActualizandoTipoPersona,
+  handleActualizandoRegimen,
+  handleActualizandoUsoCFDI,
 };
